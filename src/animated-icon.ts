@@ -144,8 +144,8 @@ export class FsnAnimatedIcon extends LitElement {
   private _bang(): TemplateResult {
     return svg`
       <g class="bang">
-        <rect x="53.5" y="45" width="13" height="37" rx="6.5"></rect>
-        <circle cx="60" cy="92.5" r="7"></circle>
+        <rect x="53.25" y="37" width="13.5" height="39" rx="6.75"></rect>
+        <circle cx="60" cy="88" r="7.25"></circle>
       </g>
     `;
   }
@@ -170,6 +170,12 @@ export class FsnAnimatedIcon extends LitElement {
       width: 100%;
       height: 100%;
       pointer-events: none;
+      /*
+       * border-box matters: the warning layer is nudged with padding, and under
+       * content-box that padding would be added to the declared 100% height and
+       * shift the icon by the whole amount instead of insetting it.
+       */
+      box-sizing: border-box;
     }
 
     .shape {
@@ -192,13 +198,19 @@ export class FsnAnimatedIcon extends LitElement {
     }
 
     .stack.warning .icon-layer {
-      /* Shift the icon down onto the triangle's centroid. */
-      padding-top: calc(var(--fsn-size) * 0.19);
+      /*
+       * Sit the icon between the triangle's optical centre (60) and its
+       * centroid (71.5). Padding on a centred flex box moves the content centre
+       * by half the padding, so 0.1 lands it on y=66 of the 120-unit viewBox -
+       * high enough to look centred, low enough that the triangle is still wide
+       * enough to hold it.
+       */
+      padding-top: calc(var(--fsn-size) * 0.1);
     }
 
     .stack.warning .icon-layer ha-icon,
     .stack.warning .icon-layer ha-state-icon {
-      --mdc-icon-size: calc(var(--fsn-size) * 0.4);
+      --mdc-icon-size: calc(var(--fsn-size) * 0.46);
     }
 
     /* Progress keeps its icon solid and tinted rather than cut out. */
@@ -253,7 +265,7 @@ export class FsnAnimatedIcon extends LitElement {
 
     .bang {
       opacity: 0;
-      transform-origin: 60px 72px;
+      transform-origin: 60px 66px;
     }
 
     /* --- animations ------------------------------------------------------ */
