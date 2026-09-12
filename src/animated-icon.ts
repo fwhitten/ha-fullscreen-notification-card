@@ -201,11 +201,11 @@ export class FsnAnimatedIcon extends LitElement {
       /*
        * Sit the icon between the triangle's optical centre (60) and its
        * centroid (71.5). Padding on a centred flex box moves the content centre
-       * by half the padding, so 0.1 lands it on y=66 of the 120-unit viewBox -
-       * high enough to look centred, low enough that the triangle is still wide
-       * enough to hold it.
+       * by half the padding, so 0.133 lands it on y=68 of the 120-unit viewBox -
+       * low enough to look settled in the triangle, high enough that there is
+       * still width to hold it.
        */
-      padding-top: calc(var(--fsn-size) * 0.1);
+      padding-top: calc(var(--fsn-size) * 0.133);
     }
 
     .stack.warning .icon-layer ha-icon,

@@ -17,6 +17,10 @@ import type {
   NotificationConfig,
 } from './types';
 
+type ProgressMode = 'entity' | 'value';
+
+const ENTITY_ID = /^[a-z_]+\.[a-z0-9_]+$/;
+
 const LABELS: Record<string, string> = {
   style: 'Notification style',
   theme: 'Colour scheme',
@@ -31,7 +35,7 @@ const LABELS: Record<string, string> = {
   type: 'Type',
   title: 'Title',
   message: 'Message',
-  entity: 'Entity',
+  entity: 'Trigger entity',
   icon: 'Icon',
   color: 'Colour',
   state: 'Trigger when the entity state is',
@@ -46,10 +50,9 @@ const LABELS: Record<string, string> = {
 
 const HELPERS: Record<string, string> = {
   duration: 'Seconds each notification stays on screen.',
-  entity: 'Used for the icon, and as the subject of the simple trigger below.',
-  icon: 'Leave empty to use the entity icon.',
-  state: 'Leave empty if you are using the advanced conditions below.',
-  progress: 'A number, an entity id, or a template. Defaults to the entity state.',
+  entity: 'The subject of the simple trigger below, and the source of the icon.',
+  icon: "Leave empty to use the trigger entity's icon.",
+  state: 'Pick a known state, or type any value. Leave empty to use the advanced conditions below.',
   progress_max: 'Defaults to the entity max attribute, or 100.',
 };
 
@@ -83,12 +86,6 @@ const GLOBAL_SCHEMA = [
           },
         },
       },
-    ],
-  },
-  {
-    type: 'grid',
-    name: '',
-    schema: [
       {
         name: 'duration',
         selector: { number: { min: 0.5, step: 0.5, mode: 'box', unit_of_measurement: 's' } },
@@ -126,72 +123,74 @@ const GLOBAL_SCHEMA = [
   },
 ];
 
-const NOTIFICATION_SCHEMA = [
-  {
-    name: 'type',
-    required: true,
-    selector: {
-      select: {
-        mode: 'dropdown',
-        options: [
-          { value: 'success', label: 'Success' },
-          { value: 'warning', label: 'Warning' },
-          { value: 'progress', label: 'Progress' },
-        ],
-      },
-    },
-  },
-  { name: 'title', required: true, selector: { text: {} } },
-  { name: 'message', selector: { text: { multiline: true } } },
+const IDENTITY_SCHEMA = [
   {
     type: 'grid',
     name: '',
     schema: [
-      { name: 'entity', selector: { entity: {} } },
-      { name: 'icon', selector: { icon: {} } },
+      {
+        name: 'type',
+        required: true,
+        selector: {
+          select: {
+            mode: 'dropdown',
+            options: [
+              { value: 'success', label: 'Success' },
+              { value: 'warning', label: 'Warning' },
+              { value: 'progress', label: 'Progress' },
+            ],
+          },
+        },
+      },
+      { name: 'title', required: true, selector: { text: {} } },
+      { name: 'message', selector: { text: { multiline: true } } },
     ],
   },
-  { name: 'color', selector: { ui_color: {} } },
+];
+
+const APPEARANCE_SCHEMA = [
   {
-    type: 'expandable',
+    type: 'grid',
     name: '',
-    title: 'Trigger',
-    icon: 'mdi:flash-outline',
     schema: [
-      { name: 'state', selector: { text: {} } },
+      { name: 'icon', selector: { icon: {} } },
+      { name: 'color', selector: { ui_color: {} } },
+    ],
+  },
+];
+
+const TIMING_SCHEMA = [
+  {
+    type: 'grid',
+    name: '',
+    schema: [
       {
-        type: 'grid',
-        name: '',
-        schema: [
-          {
-            name: 'cooldown',
-            selector: { number: { min: 0, step: 1, mode: 'box', unit_of_measurement: 's' } },
-          },
-          {
-            name: 'duration',
-            selector: { number: { min: 0, step: 0.5, mode: 'box', unit_of_measurement: 's' } },
-          },
-        ],
+        name: 'cooldown',
+        selector: { number: { min: 0, step: 1, mode: 'box', unit_of_measurement: 's' } },
       },
+      {
+        name: 'duration',
+        selector: { number: { min: 0, step: 0.5, mode: 'box', unit_of_measurement: 's' } },
+      },
+    ],
+  },
+];
+
+const TRIGGER_TOGGLES_SCHEMA = [
+  {
+    type: 'grid',
+    name: '',
+    schema: [
       { name: 'trigger_on_load', selector: { boolean: {} } },
       { name: 'cancel_if_condition_clears', selector: { boolean: {} } },
     ],
   },
+];
+
+const EXTRAS_SCHEMA = [
   {
-    type: 'expandable',
+    type: 'grid',
     name: '',
-    title: 'Progress ring',
-    icon: 'mdi:progress-helper',
-    schema: [
-      { name: 'progress', selector: { text: {} } },
-      { name: 'progress_max', selector: { text: {} } },
-    ],
-  },
-  {
-    type: 'expandable',
-    name: '',
-    title: 'Extras',
-    icon: 'mdi:dots-horizontal',
     schema: [
       { name: 'tint', selector: { boolean: {} } },
       { name: 'tap_action', selector: { ui_action: {} } },
@@ -213,6 +212,7 @@ const fireConfigChanged = (element: HTMLElement, config: unknown): void => {
 export class FullscreenNotificationCardEditor extends LitElement {
   @state() private _config?: FullscreenNotificationCardConfig;
   @state() private _expanded = new Set<number>();
+  @state() private _progressModes = new Map<number, ProgressMode>();
 
   private _hass?: HomeAssistant;
   private _overlay?: FsnOverlay;
@@ -268,6 +268,7 @@ export class FullscreenNotificationCardEditor extends LitElement {
 
     return html`
       <ha-form
+        class="tight"
         .hass=${this._hass}
         .data=${globals}
         .schema=${GLOBAL_SCHEMA}
@@ -281,62 +282,140 @@ export class FullscreenNotificationCardEditor extends LitElement {
         this._renderNotification(notification, index),
       )}
 
-      <button class="add" @click=${this._add}>
+      <button class="add" type="button" @click=${this._add}>
         <ha-icon icon="mdi:plus"></ha-icon> Add notification
       </button>
     `;
+  }
+
+  /**
+   * One `ha-form` per visual group rather than one big schema. ha-form hard-codes
+   * a 24px margin between top-level rows, but `ha-form-grid` spaces its rows with
+   * custom properties - so grouping fields into single-purpose grids is the only
+   * way to control the spacing from out here.
+   */
+  private _form(
+    notification: NotificationConfig,
+    index: number,
+    schema: unknown,
+    classes: string,
+  ): TemplateResult {
+    return html`
+      <ha-form
+        class=${classes}
+        .hass=${this._hass}
+        .data=${this._formData(notification)}
+        .schema=${schema}
+        .computeLabel=${this._label}
+        .computeHelper=${this._helper}
+        @value-changed=${(ev: CustomEvent) => this._notificationChanged(index, ev)}
+      ></ha-form>
+    `;
+  }
+
+  private _formData(notification: NotificationConfig): Record<string, unknown> {
+    return {
+      ...notification,
+      // `tint` also accepts an explicit colour in YAML; the toggle only says
+      // whether tinting is on, and an existing colour survives a change.
+      tint: notification.tint !== undefined && notification.tint !== false,
+    };
   }
 
   private _renderNotification(
     notification: NotificationConfig,
     index: number,
   ): TemplateResult {
-    const data = {
-      ...notification,
-      // `tint` also accepts an explicit colour in YAML; the toggle only says
-      // whether tinting is on, and an existing colour is preserved on change.
-      tint: notification.tint !== undefined && notification.tint !== false,
-    };
+    const last = (this._config?.notifications?.length ?? 1) - 1;
 
     return html`
       <ha-expansion-panel
         outlined
         .expanded=${this._expanded.has(index)}
-        @expanded-changed=${(ev: CustomEvent) => this._toggle(index, ev.detail.expanded)}
+        @expanded-changed=${(ev: CustomEvent) => this._panelToggled(index, ev)}
       >
         <div slot="header" class="header">
           <ha-icon class=${notification.type} icon=${this._headerIcon(notification)}></ha-icon>
           <span class="header-title">${notification.title || 'Untitled notification'}</span>
         </div>
 
-        <div class="row toolbar">
-          <button title="Preview" @click=${() => this._preview(notification, index)}>
+        <div class="toolbar">
+          <button type="button" title="Preview" @click=${() => this._preview(notification, index)}>
             <ha-icon icon="mdi:play-circle-outline"></ha-icon>
           </button>
           <span class="spacer"></span>
-          <button title="Move up" ?disabled=${index === 0} @click=${() => this._move(index, -1)}>
+          <button type="button" title="Duplicate" @click=${() => this._duplicate(index)}>
+            <ha-icon icon="mdi:content-copy"></ha-icon>
+          </button>
+          <button
+            type="button"
+            title="Move up"
+            ?disabled=${index === 0}
+            @click=${() => this._move(index, -1)}
+          >
             <ha-icon icon="mdi:arrow-up"></ha-icon>
           </button>
           <button
+            type="button"
             title="Move down"
-            ?disabled=${index === (this._config?.notifications?.length ?? 1) - 1}
+            ?disabled=${index === last}
             @click=${() => this._move(index, 1)}
           >
             <ha-icon icon="mdi:arrow-down"></ha-icon>
           </button>
-          <button title="Delete" class="danger" @click=${() => this._remove(index)}>
+          <button type="button" title="Delete" class="danger" @click=${() => this._remove(index)}>
             <ha-icon icon="mdi:delete-outline"></ha-icon>
           </button>
         </div>
 
-        <ha-form
-          .hass=${this._hass}
-          .data=${data}
-          .schema=${NOTIFICATION_SCHEMA}
-          .computeLabel=${this._label}
-          .computeHelper=${this._helper}
-          @value-changed=${(ev: CustomEvent) => this._notificationChanged(index, ev)}
-        ></ha-form>
+        ${this._form(notification, index, IDENTITY_SCHEMA, 'stack')}
+        ${this._form(notification, index, APPEARANCE_SCHEMA, 'pair')}
+        ${this._renderTrigger(notification, index)}
+        ${notification.type === 'progress' ? this._renderProgress(notification, index) : nothing}
+
+        <ha-expansion-panel
+          class="sub"
+          outlined
+          left-chevron
+          header="Extras"
+          @expanded-changed=${this._stopEvent}
+        >
+          ${this._form(notification, index, EXTRAS_SCHEMA, 'stack')}
+        </ha-expansion-panel>
+      </ha-expansion-panel>
+    `;
+  }
+
+  private _renderTrigger(
+    notification: NotificationConfig,
+    index: number,
+  ): TemplateResult {
+    // With an entity chosen, hand the state field HA's own state selector: it
+    // lists that entity's known states and still accepts anything typed, so
+    // custom and numeric values need no separate mode.
+    const stateField = notification.entity
+      ? { name: 'state', selector: { state: { entity_id: notification.entity } } }
+      : { name: 'state', selector: { text: {} } };
+
+    const schema = [
+      {
+        type: 'grid',
+        name: '',
+        schema: [{ name: 'entity', selector: { entity: {} } }, stateField],
+      },
+    ];
+
+    return html`
+      <ha-expansion-panel
+        class="sub"
+        outlined
+        left-chevron
+        header="Trigger"
+        @expanded-changed=${this._stopEvent}
+      >
+        ${this._form(notification, index, schema, 'stack')}
+        ${this._form(notification, index, TIMING_SCHEMA, 'pair')}
+        ${this._form(notification, index, TRIGGER_TOGGLES_SCHEMA, 'stack')}
 
         <div class="yaml-label">
           Advanced conditions
@@ -353,6 +432,56 @@ export class FullscreenNotificationCardEditor extends LitElement {
     `;
   }
 
+  private _renderProgress(
+    notification: NotificationConfig,
+    index: number,
+  ): TemplateResult {
+    const mode = this._progressMode(notification, index);
+
+    // HA's entity selector has no free-text mode, so the only way to offer an
+    // entity search here without losing literals and templates is to switch the
+    // field between the two pickers.
+    const schema = [
+      {
+        type: 'grid',
+        name: '',
+        schema: [
+          mode === 'entity'
+            ? { name: 'progress', selector: { entity: {} } }
+            : { name: 'progress', selector: { text: {} } },
+          { name: 'progress_max', selector: { text: {} } },
+        ],
+      },
+    ];
+
+    return html`
+      <ha-expansion-panel
+        class="sub"
+        outlined
+        left-chevron
+        header="Progress ring"
+        @expanded-changed=${this._stopEvent}
+      >
+        <div class="segmented" role="tablist">
+          ${(['entity', 'value'] as ProgressMode[]).map(
+            (option) => html`
+              <button
+                type="button"
+                role="tab"
+                class=${mode === option ? 'selected' : ''}
+                aria-selected=${mode === option}
+                @click=${() => this._setProgressMode(index, option)}
+              >
+                ${option === 'entity' ? 'From an entity' : 'Number or template'}
+              </button>
+            `,
+          )}
+        </div>
+        ${this._form(notification, index, schema, 'stack')}
+      </ha-expansion-panel>
+    `;
+  }
+
   private _headerIcon(notification: NotificationConfig): string {
     switch (notification.type) {
       case 'warning':
@@ -362,6 +491,22 @@ export class FullscreenNotificationCardEditor extends LitElement {
       default:
         return 'mdi:check-circle-outline';
     }
+  }
+
+  /**
+   * HA fires component events with `bubbles` and `composed` set, so a nested
+   * panel's expanded-changed would otherwise reach the notification panel's
+   * handler and collapse the wrong thing.
+   */
+  private _stopEvent = (ev: Event): void => {
+    ev.stopPropagation();
+  };
+
+  private _panelToggled(index: number, ev: CustomEvent): void {
+    if (ev.target !== ev.currentTarget) {
+      return;
+    }
+    this._toggle(index, ev.detail.expanded);
   }
 
   private _toggle(index: number, expanded: boolean): void {
@@ -374,10 +519,45 @@ export class FullscreenNotificationCardEditor extends LitElement {
     this._expanded = next;
   }
 
+  private _progressMode(
+    notification: NotificationConfig,
+    index: number,
+  ): ProgressMode {
+    const chosen = this._progressModes.get(index);
+    if (chosen) {
+      return chosen;
+    }
+    const value = notification.progress;
+    return typeof value === 'string' && ENTITY_ID.test(value) ? 'entity' : 'value';
+  }
+
+  private _setProgressMode(index: number, mode: ProgressMode): void {
+    const next = new Map(this._progressModes);
+    next.set(index, mode);
+    this._progressModes = next;
+
+    // The old value is meaningless in the other mode, and a stale entity id in
+    // a number field is more confusing than an empty one.
+    const notifications = [...(this._config?.notifications ?? [])];
+    if (notifications[index]?.progress !== undefined) {
+      const updated = { ...notifications[index] };
+      delete updated.progress;
+      notifications[index] = updated;
+      this._emit(notifications);
+    }
+  }
+
   // --- config mutation ---------------------------------------------------
 
-  private _emit(notifications: NotificationConfig[], globals?: Partial<FullscreenNotificationCardConfig>): void {
-    const config = { ...this._config, ...globals, notifications } as FullscreenNotificationCardConfig;
+  private _emit(
+    notifications: NotificationConfig[],
+    globals?: Partial<FullscreenNotificationCardConfig>,
+  ): void {
+    const config = {
+      ...this._config,
+      ...globals,
+      notifications,
+    } as FullscreenNotificationCardConfig;
     this._config = config;
     fireConfigChanged(this, config);
   }
@@ -391,9 +571,12 @@ export class FullscreenNotificationCardEditor extends LitElement {
     ev.stopPropagation();
     const notifications = [...(this._config?.notifications ?? [])];
     const previous = notifications[index];
+    if (!previous) {
+      return;
+    }
     const value = { ...ev.detail.value } as NotificationConfig;
 
-    // Restore the richer `tint` forms the toggle cannot express.
+    // Restore the richer forms the plain controls cannot express.
     if (value.tint === true && typeof previous.tint === 'string') {
       value.tint = previous.tint;
     } else if (value.tint === false) {
@@ -402,7 +585,7 @@ export class FullscreenNotificationCardEditor extends LitElement {
     value.condition = previous.condition;
 
     for (const key of Object.keys(value) as (keyof NotificationConfig)[]) {
-      if (value[key] === '' || value[key] === undefined) {
+      if (value[key] === '' || value[key] === undefined || value[key] === null) {
         delete value[key];
       }
     }
@@ -433,7 +616,24 @@ export class FullscreenNotificationCardEditor extends LitElement {
       ...(this._config?.notifications ?? []),
       { type: 'success', title: 'New notification' } as NotificationConfig,
     ];
-    this._toggle(notifications.length - 1, true);
+    this._expanded = new Set([notifications.length - 1]);
+    this._emit(notifications);
+  }
+
+  private _duplicate(index: number): void {
+    const notifications = [...(this._config?.notifications ?? [])];
+    const source = notifications[index];
+    if (!source) {
+      return;
+    }
+    const copy = JSON.parse(JSON.stringify(source)) as NotificationConfig;
+    // Ids identify a notification's cooldown and edge state, so a copy must not
+    // inherit one.
+    delete copy.id;
+    copy.title = `${copy.title} (copy)`;
+    notifications.splice(index + 1, 0, copy);
+    this._expanded = new Set([index + 1]);
+    this._progressModes = new Map();
     this._emit(notifications);
   }
 
@@ -441,6 +641,7 @@ export class FullscreenNotificationCardEditor extends LitElement {
     const notifications = [...(this._config?.notifications ?? [])];
     notifications.splice(index, 1);
     this._expanded = new Set();
+    this._progressModes = new Map();
     this._emit(notifications);
   }
 
@@ -454,7 +655,8 @@ export class FullscreenNotificationCardEditor extends LitElement {
       notifications[target],
       notifications[index],
     ];
-    this._expanded = new Set();
+    this._expanded = new Set([target]);
+    this._progressModes = new Map();
     this._emit(notifications);
   }
 
@@ -465,31 +667,40 @@ export class FullscreenNotificationCardEditor extends LitElement {
     if (!config) {
       return;
     }
-    if (!this._overlay) {
-      this._overlay = document.createElement('fsn-overlay');
-      document.body.appendChild(this._overlay);
+
+    try {
+      if (!this._overlay?.isConnected) {
+        this._overlay = document.createElement('fsn-overlay');
+        document.body.appendChild(this._overlay);
+      }
+
+      const resolved = resolveNotification(
+        notification,
+        notificationKey(notification, index),
+        config,
+        this._hass,
+        (template) => this._templates.get(template) ?? template,
+      );
+
+      this._overlay.present(resolved, {
+        hass: this._hass,
+        style: config.style ?? DEFAULTS.style,
+        dark: isDarkMode(config.theme ?? DEFAULTS.theme, this._hass),
+        backdrop: config.pill_backdrop ?? DEFAULTS.pill_backdrop,
+        blur: config.backdrop_blur ?? DEFAULTS.backdrop_blur,
+        opacity: config.backdrop_opacity ?? DEFAULTS.backdrop_opacity,
+        reduced:
+          (config.respect_reduced_motion ?? DEFAULTS.respect_reduced_motion) &&
+          prefersReducedMotion(),
+        dismissOnTap: true,
+      }).done.catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('[fullscreen-notification-card] preview failed:', err);
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[fullscreen-notification-card] preview failed:', err);
     }
-
-    const resolved = resolveNotification(
-      notification,
-      notificationKey(notification, index),
-      config,
-      this._hass,
-      (template) => this._templates.get(template) ?? template,
-    );
-
-    this._overlay.present(resolved, {
-      hass: this._hass,
-      style: config.style ?? DEFAULTS.style,
-      dark: isDarkMode(config.theme ?? DEFAULTS.theme, this._hass),
-      backdrop: config.pill_backdrop ?? DEFAULTS.pill_backdrop,
-      blur: config.backdrop_blur ?? DEFAULTS.backdrop_blur,
-      opacity: config.backdrop_opacity ?? DEFAULTS.backdrop_opacity,
-      reduced:
-        (config.respect_reduced_motion ?? DEFAULTS.respect_reduced_motion) &&
-        prefersReducedMotion(),
-      dismissOnTap: true,
-    });
   }
 
   static styles = css`
@@ -499,6 +710,17 @@ export class FullscreenNotificationCardEditor extends LitElement {
       gap: 12px;
     }
 
+    /* ha-form-grid spaces its rows with this token; tightening it here is the
+       only lever we have on spacing inside ha-form's shadow root. */
+    ha-form {
+      display: block;
+      --ha-space-6: 10px;
+    }
+
+    ha-form.stack {
+      --form-grid-column-count: 1;
+    }
+
     .section-title {
       font-weight: 500;
       margin-top: 4px;
@@ -506,6 +728,10 @@ export class FullscreenNotificationCardEditor extends LitElement {
 
     ha-expansion-panel {
       --expansion-panel-summary-padding: 0 12px;
+    }
+
+    ha-expansion-panel.sub {
+      margin-top: 4px;
     }
 
     .header {
@@ -533,14 +759,11 @@ export class FullscreenNotificationCardEditor extends LitElement {
       color: var(--primary-color, #03a9f4);
     }
 
-    .row {
+    .toolbar {
       display: flex;
       align-items: center;
-      gap: 4px;
-    }
-
-    .toolbar {
-      padding: 4px 8px 8px;
+      gap: 2px;
+      padding: 2px 4px 6px;
     }
 
     .spacer {
@@ -582,14 +805,33 @@ export class FullscreenNotificationCardEditor extends LitElement {
       color: var(--primary-color);
     }
 
-    ha-form,
+    .segmented {
+      display: flex;
+      gap: 4px;
+      padding: 4px 0 10px;
+    }
+
+    .segmented button {
+      flex: 1;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      border: 1px solid var(--divider-color, #444);
+    }
+
+    .segmented button.selected {
+      border-color: var(--primary-color);
+      color: var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    }
+
     ha-yaml-editor {
       display: block;
-      padding: 0 8px 8px;
+      padding-bottom: 4px;
     }
 
     .yaml-label {
-      padding: 4px 8px;
+      padding: 6px 0 4px;
       font-size: 13px;
       font-weight: 500;
     }
