@@ -30,9 +30,13 @@ every MDI icon and every custom icon pack works without any extra setup.
 
 **With HACS (recommended)**
 
-1. Click the button above, or in HACS search for **Fullscreen Notification Card**.
-2. Install, then reload your browser.
+1. Click the button above and confirm when HACS offers to add the repository.
+2. Download it, then reload your browser.
 3. Add the card to any dashboard view — **Add card → Fullscreen Notification**.
+
+If you would rather add it by hand: in HACS open the ⋮ menu →
+**Custom repositories**, paste `https://github.com/fwhitten/ha-fullscreen-notification-card`,
+choose type **Dashboard**, and click **Add**.
 
 **Manually**
 
@@ -272,7 +276,7 @@ MIT — see [LICENSE](LICENSE).
 
 [hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square
 [hacs-button]: https://my.home-assistant.io/badges/hacs_repository.svg
-[hacs-url]: https://my.home-assistant.io/redirect/hacs_repository/?owner=fwhitten&repository=ha-fullscreen-notification-card&category=dashboard
+[hacs-url]: https://my.home-assistant.io/redirect/hacs_repository/?owner=fwhitten&repository=ha-fullscreen-notification-card&category=plugin
 [release-badge]: https://img.shields.io/github/v/release/fwhitten/ha-fullscreen-notification-card?style=flat-square
 [release-url]: https://github.com/fwhitten/ha-fullscreen-notification-card/releases/latest
 [license-badge]: https://img.shields.io/github/license/fwhitten/ha-fullscreen-notification-card?style=flat-square
