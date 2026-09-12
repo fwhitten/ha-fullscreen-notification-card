@@ -123,32 +123,26 @@ const GLOBAL_SCHEMA = [
   },
 ];
 
-const IDENTITY_SCHEMA = [
+const S_TYPE = [
   {
-    type: 'grid',
-    name: '',
-    schema: [
-      {
-        name: 'type',
-        required: true,
-        selector: {
-          select: {
-            mode: 'dropdown',
-            options: [
-              { value: 'success', label: 'Success' },
-              { value: 'warning', label: 'Warning' },
-              { value: 'progress', label: 'Progress' },
-            ],
-          },
-        },
+    name: 'type',
+    required: true,
+    selector: {
+      select: {
+        mode: 'dropdown',
+        options: [
+          { value: 'success', label: 'Success' },
+          { value: 'warning', label: 'Warning' },
+          { value: 'progress', label: 'Progress' },
+        ],
       },
-      { name: 'title', required: true, selector: { text: {} } },
-      { name: 'message', selector: { text: { multiline: true } } },
-    ],
+    },
   },
 ];
+const S_TITLE = [{ name: 'title', required: true, selector: { text: {} } }];
+const S_MESSAGE = [{ name: 'message', selector: { text: { multiline: true } } }];
 
-const APPEARANCE_SCHEMA = [
+const S_ICON_COLOUR = [
   {
     type: 'grid',
     name: '',
@@ -159,7 +153,10 @@ const APPEARANCE_SCHEMA = [
   },
 ];
 
-const TIMING_SCHEMA = [
+const S_ENTITY = [{ name: 'entity', selector: { entity: {} } }];
+const S_STATE_TEXT = [{ name: 'state', selector: { text: {} } }];
+
+const S_TIMING = [
   {
     type: 'grid',
     name: '',
@@ -176,27 +173,17 @@ const TIMING_SCHEMA = [
   },
 ];
 
-const TRIGGER_TOGGLES_SCHEMA = [
-  {
-    type: 'grid',
-    name: '',
-    schema: [
-      { name: 'trigger_on_load', selector: { boolean: {} } },
-      { name: 'cancel_if_condition_clears', selector: { boolean: {} } },
-    ],
-  },
+const S_TRIGGER_ON_LOAD = [{ name: 'trigger_on_load', selector: { boolean: {} } }];
+const S_CANCEL_ON_CLEAR = [
+  { name: 'cancel_if_condition_clears', selector: { boolean: {} } },
 ];
 
-const EXTRAS_SCHEMA = [
-  {
-    type: 'grid',
-    name: '',
-    schema: [
-      { name: 'tint', selector: { boolean: {} } },
-      { name: 'tap_action', selector: { ui_action: {} } },
-    ],
-  },
-];
+const S_PROGRESS_ENTITY = [{ name: 'progress', selector: { entity: {} } }];
+const S_PROGRESS_TEXT = [{ name: 'progress', selector: { text: {} } }];
+const S_PROGRESS_MAX = [{ name: 'progress_max', selector: { text: {} } }];
+
+const S_TINT = [{ name: 'tint', selector: { boolean: {} } }];
+const S_TAP_ACTION = [{ name: 'tap_action', selector: { ui_action: {} } }];
 
 const fireConfigChanged = (element: HTMLElement, config: unknown): void => {
   element.dispatchEvent(
@@ -268,7 +255,6 @@ export class FullscreenNotificationCardEditor extends LitElement {
 
     return html`
       <ha-form
-        class="tight"
         .hass=${this._hass}
         .data=${globals}
         .schema=${GLOBAL_SCHEMA}
@@ -289,20 +275,20 @@ export class FullscreenNotificationCardEditor extends LitElement {
   }
 
   /**
-   * One `ha-form` per visual group rather than one big schema. ha-form hard-codes
-   * a 24px margin between top-level rows, but `ha-form-grid` spaces its rows with
-   * custom properties - so grouping fields into single-purpose grids is the only
-   * way to control the spacing from out here.
+   * One `ha-form` per field. ha-form hard-codes `margin-bottom: 24px` on every
+   * `.root` child except the last, so a form holding a single item carries no
+   * margin at all and this editor's own flex `gap` decides the spacing. The
+   * obvious shortcut - retuning `--ha-space-6`, which ha-form-grid uses for its
+   * row gap - is not safe: it is a global spacing token that ha-textarea and
+   * friends also use for their internal padding.
    */
   private _form(
     notification: NotificationConfig,
     index: number,
     schema: unknown,
-    classes: string,
   ): TemplateResult {
     return html`
       <ha-form
-        class=${classes}
         .hass=${this._hass}
         .data=${this._formData(notification)}
         .schema=${schema}
@@ -311,6 +297,25 @@ export class FullscreenNotificationCardEditor extends LitElement {
         @value-changed=${(ev: CustomEvent) => this._notificationChanged(index, ev)}
       ></ha-form>
     `;
+  }
+
+  /**
+   * Schemas are handed to ha-form by reference, so build the entity-dependent
+   * ones once per entity rather than on every render - a fresh object each time
+   * would rebuild the picker while someone is using it.
+   */
+  private _stateSchemas = new Map<string, unknown>();
+
+  private _stateSchema(entity?: string): unknown {
+    if (!entity) {
+      return S_STATE_TEXT;
+    }
+    let schema = this._stateSchemas.get(entity);
+    if (!schema) {
+      schema = [{ name: 'state', selector: { state: { entity_id: entity } } }];
+      this._stateSchemas.set(entity, schema);
+    }
+    return schema;
   }
 
   private _formData(notification: NotificationConfig): Record<string, unknown> {
@@ -368,8 +373,13 @@ export class FullscreenNotificationCardEditor extends LitElement {
           </button>
         </div>
 
-        ${this._form(notification, index, IDENTITY_SCHEMA, 'stack')}
-        ${this._form(notification, index, APPEARANCE_SCHEMA, 'pair')}
+        <div class="fields">
+          ${this._form(notification, index, S_TYPE)}
+          ${this._form(notification, index, S_TITLE)}
+          ${this._form(notification, index, S_MESSAGE)}
+          ${this._form(notification, index, S_ICON_COLOUR)}
+        </div>
+
         ${this._renderTrigger(notification, index)}
         ${notification.type === 'progress' ? this._renderProgress(notification, index) : nothing}
 
@@ -380,7 +390,10 @@ export class FullscreenNotificationCardEditor extends LitElement {
           header="Extras"
           @expanded-changed=${this._stopEvent}
         >
-          ${this._form(notification, index, EXTRAS_SCHEMA, 'stack')}
+          <div class="fields">
+            ${this._form(notification, index, S_TINT)}
+            ${this._form(notification, index, S_TAP_ACTION)}
+          </div>
         </ha-expansion-panel>
       </ha-expansion-panel>
     `;
@@ -390,21 +403,6 @@ export class FullscreenNotificationCardEditor extends LitElement {
     notification: NotificationConfig,
     index: number,
   ): TemplateResult {
-    // With an entity chosen, hand the state field HA's own state selector: it
-    // lists that entity's known states and still accepts anything typed, so
-    // custom and numeric values need no separate mode.
-    const stateField = notification.entity
-      ? { name: 'state', selector: { state: { entity_id: notification.entity } } }
-      : { name: 'state', selector: { text: {} } };
-
-    const schema = [
-      {
-        type: 'grid',
-        name: '',
-        schema: [{ name: 'entity', selector: { entity: {} } }, stateField],
-      },
-    ];
-
     return html`
       <ha-expansion-panel
         class="sub"
@@ -413,9 +411,19 @@ export class FullscreenNotificationCardEditor extends LitElement {
         header="Trigger"
         @expanded-changed=${this._stopEvent}
       >
-        ${this._form(notification, index, schema, 'stack')}
-        ${this._form(notification, index, TIMING_SCHEMA, 'pair')}
-        ${this._form(notification, index, TRIGGER_TOGGLES_SCHEMA, 'stack')}
+        <div class="fields">
+          ${this._form(notification, index, S_ENTITY)}
+          ${
+            // With an entity chosen, hand the state field HA's own state
+            // selector: it lists that entity's known states and passes
+            // allow-custom-value through to the picker, so anything typed -
+            // including a number - still works.
+            this._form(notification, index, this._stateSchema(notification.entity))
+          }
+          ${this._form(notification, index, S_TIMING)}
+          ${this._form(notification, index, S_TRIGGER_ON_LOAD)}
+          ${this._form(notification, index, S_CANCEL_ON_CLEAR)}
+        </div>
 
         <div class="yaml-label">
           Advanced conditions
@@ -437,22 +445,6 @@ export class FullscreenNotificationCardEditor extends LitElement {
     index: number,
   ): TemplateResult {
     const mode = this._progressMode(notification, index);
-
-    // HA's entity selector has no free-text mode, so the only way to offer an
-    // entity search here without losing literals and templates is to switch the
-    // field between the two pickers.
-    const schema = [
-      {
-        type: 'grid',
-        name: '',
-        schema: [
-          mode === 'entity'
-            ? { name: 'progress', selector: { entity: {} } }
-            : { name: 'progress', selector: { text: {} } },
-          { name: 'progress_max', selector: { text: {} } },
-        ],
-      },
-    ];
 
     return html`
       <ha-expansion-panel
@@ -477,7 +469,19 @@ export class FullscreenNotificationCardEditor extends LitElement {
             `,
           )}
         </div>
-        ${this._form(notification, index, schema, 'stack')}
+        <div class="fields">
+          ${
+            // HA's entity selector has no free-text mode, so switching the field
+            // is the only way to offer an entity search without losing literals
+            // and templates.
+            this._form(
+              notification,
+              index,
+              mode === 'entity' ? S_PROGRESS_ENTITY : S_PROGRESS_TEXT,
+            )
+          }
+          ${this._form(notification, index, S_PROGRESS_MAX)}
+        </div>
       </ha-expansion-panel>
     `;
   }
@@ -710,15 +714,16 @@ export class FullscreenNotificationCardEditor extends LitElement {
       gap: 12px;
     }
 
-    /* ha-form-grid spaces its rows with this token; tightening it here is the
-       only lever we have on spacing inside ha-form's shadow root. */
     ha-form {
       display: block;
-      --ha-space-6: 10px;
     }
 
-    ha-form.stack {
-      --form-grid-column-count: 1;
+    /* Every ha-form here holds one field, so spacing is entirely ours. */
+    .fields {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-bottom: 4px;
     }
 
     .section-title {

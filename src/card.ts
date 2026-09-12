@@ -105,12 +105,30 @@ export class FullscreenNotificationCard extends LitElement {
   public connectedCallback(): void {
     super.connectedCallback();
     this._editMode = this._detectEditMode();
+    this._ensureOverlay();
+  }
+
+  /**
+   * Portalled out of the dashboard so the surface is measured against the
+   * viewport rather than a transformed Sections container. Created on demand as
+   * well as on connect, so a notification that fires before the card is
+   * attached is not silently dropped.
+   */
+  private _ensureOverlay(): FsnOverlay {
     if (!this._overlay) {
       this._overlay = document.createElement('fsn-overlay');
     }
-    // Portalled out of the dashboard so `position: fixed` is measured against
-    // the viewport rather than a transformed Sections container.
-    document.body.appendChild(this._overlay);
+    if (!this._overlay.isConnected) {
+      document.body.appendChild(this._overlay);
+    }
+    return this._overlay;
+  }
+
+  private _log(...args: unknown[]): void {
+    if (this._config?.debug) {
+      // eslint-disable-next-line no-console
+      console.debug('[fullscreen-notification-card]', ...args);
+    }
   }
 
   public disconnectedCallback(): void {
@@ -160,10 +178,7 @@ export class FullscreenNotificationCard extends LitElement {
       trigger.last = now;
       this._triggers.set(key, trigger);
 
-      if (config.debug) {
-        // eslint-disable-next-line no-console
-        console.debug('[fullscreen-notification-card]', key, { now, first, rising });
-      }
+      this._log('evaluate', key, { now, first, rising });
 
       if (rising) {
         this._fire(notification, key, trigger);
@@ -191,6 +206,7 @@ export class FullscreenNotificationCard extends LitElement {
       return;
     }
     trigger.lastFiredAt = Date.now();
+    this._log('fire', key);
     this.enqueue(notification, key);
   }
 
@@ -229,11 +245,11 @@ export class FullscreenNotificationCard extends LitElement {
   }
 
   private async _present(notification: ResolvedNotification): Promise<void> {
-    const overlay = this._overlay;
     const config = this._config;
-    if (!overlay || !config) {
+    if (!config) {
       return;
     }
+    const overlay = this._ensureOverlay();
 
     const reduced =
       (config.respect_reduced_motion ?? DEFAULTS.respect_reduced_motion) &&
@@ -254,7 +270,18 @@ export class FullscreenNotificationCard extends LitElement {
     });
 
     this._current = { key: notification.key, presentation };
-    await presentation.done;
+    this._log('present', notification.key, {
+      style: config.style ?? DEFAULTS.style,
+      duration: notification.duration,
+      attached: overlay.isConnected,
+    });
+
+    try {
+      await presentation.done;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[fullscreen-notification-card] failed to show', notification.key, err);
+    }
     this._current = undefined;
   }
 

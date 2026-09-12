@@ -142,7 +142,10 @@ export const checkCondition = (
 
 /** Every condition attached to a notification, including the shorthand form. */
 export const conditionsFor = (notification: NotificationConfig): ConditionConfig[] => {
-  const conditions = asArray(notification.condition);
+  // Copy first: for a list-valued `condition`, asArray hands back the caller's
+  // own array, and unshifting into that would mutate the stored config - adding
+  // another copy of the shorthand condition on every single state update.
+  const conditions = [...asArray(notification.condition)];
   if (notification.state !== undefined && notification.entity) {
     conditions.unshift({
       condition: 'state',

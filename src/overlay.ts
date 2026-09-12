@@ -66,6 +66,45 @@ export class FsnOverlay extends LitElement {
   @query('fsn-animated-icon') private _icon?: FsnAnimatedIcon;
 
   private _token: RunToken = { cancelled: false };
+  private _inTopLayer = false;
+
+  public connectedCallback(): void {
+    super.connectedCallback();
+    // Promote the surface to the top layer. That sidesteps z-index entirely -
+    // nothing on the dashboard and no dialog Home Assistant opens can paint
+    // over it - and it also means an ancestor `transform`, `filter` or
+    // `contain` cannot capture the fixed positioning. `manual` rather than a
+    // modal <dialog> so the page underneath stays interactive, which matters
+    // for pill notifications.
+    if (!this.hasAttribute('popover') && typeof this.showPopover === 'function') {
+      this.setAttribute('popover', 'manual');
+    }
+  }
+
+  private _enterTopLayer(): void {
+    if (this._inTopLayer || !this.hasAttribute('popover')) {
+      return;
+    }
+    try {
+      this.showPopover();
+      this._inTopLayer = true;
+    } catch {
+      // Already open, or the element is not connected yet; the fixed-position
+      // fallback below still renders it.
+    }
+  }
+
+  private _leaveTopLayer(): void {
+    if (!this._inTopLayer) {
+      return;
+    }
+    this._inTopLayer = false;
+    try {
+      this.hidePopover();
+    } catch {
+      // Already closed.
+    }
+  }
 
   public present(
     notification: ResolvedNotification,
@@ -120,6 +159,7 @@ export class FsnOverlay extends LitElement {
     const effect = EFFECT_DURATION[notification.type] * (options.reduced ? 0.6 : 1);
     const useBackdrop = options.style === 'fullscreen' || options.backdrop;
 
+    this._enterTopLayer();
     this._visible = true;
     await this.updateComplete;
     // One frame at the initial state so the opening transitions actually run.
@@ -188,6 +228,7 @@ export class FsnOverlay extends LitElement {
   }
 
   private _reset(): void {
+    this._leaveTopLayer();
     this._visible = false;
     this._backdropOn = false;
     this._iconOn = false;
@@ -309,9 +350,32 @@ export class FsnOverlay extends LitElement {
   }
 
   static styles = css`
+    /*
+     * No display declaration here on purpose: the UA rule that hides a closed popover
+     * must keep winning. Everything else undoes the UA's popover box so this is
+     * a bare, click-through, full-viewport layer in both the top-layer and the
+     * plain fixed-position fallback.
+     */
     :host {
-      display: contents;
+      position: fixed;
+      inset: 0;
+      z-index: 100000;
+      width: auto;
+      height: auto;
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      overflow: visible;
+      pointer-events: none;
       font-family: var(--paper-font-body1_-_font-family, Roboto, system-ui, sans-serif);
+    }
+
+    :host::backdrop {
+      background: transparent;
     }
 
     .root {
