@@ -17,7 +17,7 @@ export const FALLBACK_ICON: Record<NotificationType, string> = {
 /** How long each type's icon effect takes, in ms, at full motion. */
 export const EFFECT_DURATION: Record<NotificationType, number> = {
   success: 900,
-  warning: 900,
+  warning: 1060,
   progress: 1200,
 };
 
@@ -52,11 +52,18 @@ export class FsnAnimatedIcon extends LitElement {
 
   /** Restart the icon effect from the top. */
   public async play(): Promise<void> {
-    // Render once with the class removed so the browser sees a genuine
-    // transition back into `.play` and restarts the CSS animations, instead of
-    // coalescing both updates into a no-op.
     this._playing = false;
     await this.updateComplete;
+
+    // Dropping the class is not enough on its own. Both updates land inside a
+    // single frame, so the browser never recomputes style between them and
+    // carries the already-finished animations straight over - which would show
+    // the second notification in a queue with its effect already played out.
+    // Cancel them explicitly, then force a style flush before re-arming.
+    const stack = this.renderRoot.querySelector('.stack');
+    stack?.getAnimations({ subtree: true }).forEach((animation) => animation.cancel());
+    void this.offsetWidth;
+
     this._playing = true;
     await this.updateComplete;
   }
@@ -137,8 +144,8 @@ export class FsnAnimatedIcon extends LitElement {
   private _bang(): TemplateResult {
     return svg`
       <g class="bang">
-        <rect x="54" y="45" width="12" height="35" rx="6"></rect>
-        <circle cx="60" cy="91" r="6.5"></circle>
+        <rect x="53.5" y="45" width="13" height="37" rx="6.5"></rect>
+        <circle cx="60" cy="92.5" r="7"></circle>
       </g>
     `;
   }
@@ -185,13 +192,13 @@ export class FsnAnimatedIcon extends LitElement {
     }
 
     .stack.warning .icon-layer {
-      /* Optical centre of a triangle sits below its geometric centre. */
-      padding-top: calc(var(--fsn-size) * 0.13);
+      /* Shift the icon down onto the triangle's centroid. */
+      padding-top: calc(var(--fsn-size) * 0.19);
     }
 
     .stack.warning .icon-layer ha-icon,
     .stack.warning .icon-layer ha-state-icon {
-      --mdc-icon-size: calc(var(--fsn-size) * 0.36);
+      --mdc-icon-size: calc(var(--fsn-size) * 0.4);
     }
 
     /* Progress keeps its icon solid and tinted rather than cut out. */
@@ -246,7 +253,7 @@ export class FsnAnimatedIcon extends LitElement {
 
     .bang {
       opacity: 0;
-      transform-origin: 60px 68px;
+      transform-origin: 60px 72px;
     }
 
     /* --- animations ------------------------------------------------------ */
@@ -256,14 +263,26 @@ export class FsnAnimatedIcon extends LitElement {
         calc(260ms * var(--fsn-motion)) forwards;
     }
 
+    /*
+     * Warning resolves the opposite way round from success: the bare triangle
+     * is stamped with an exclamation mark, which then gives way to the entity
+     * icon so you can see what is actually complaining.
+     */
+    .stack.warning .icon-layer {
+      opacity: 0;
+    }
+
     .stack.warning.play .icon-layer {
-      animation: fade-out calc(320ms * var(--fsn-motion)) ease-in
-        calc(420ms * var(--fsn-motion)) forwards;
+      animation: fade-in calc(300ms * var(--fsn-motion)) ease
+        calc(740ms * var(--fsn-motion)) forwards;
     }
 
     .stack.warning.play .bang {
-      animation: bang-in calc(360ms * var(--fsn-motion)) cubic-bezier(0.34, 1.3, 0.64, 1)
-        calc(560ms * var(--fsn-motion)) forwards;
+      animation:
+        bang-in calc(340ms * var(--fsn-motion)) cubic-bezier(0.34, 1.3, 0.64, 1)
+          calc(60ms * var(--fsn-motion)) forwards,
+        bang-out calc(260ms * var(--fsn-motion)) ease calc(740ms * var(--fsn-motion))
+          forwards;
     }
 
     .ring .track {
@@ -295,7 +314,13 @@ export class FsnAnimatedIcon extends LitElement {
       }
     }
 
-    @keyframes fade-out {
+    @keyframes fade-in {
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes bang-out {
       to {
         opacity: 0;
       }
