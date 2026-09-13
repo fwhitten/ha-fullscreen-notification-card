@@ -105,6 +105,10 @@ export interface NotificationConfig {
   /** Abort a showing notification if its condition stops being true. */
   cancel_if_condition_clears?: boolean;
   tap_action?: ActionConfig;
+  /** Set false to always deliver immediately, ignoring the card's gate. */
+  hold?: boolean;
+  /** Delivery gate for this notification, replacing the card-level one. */
+  deliver_when?: ConditionConfig | ConditionConfig[];
 }
 
 export interface FullscreenNotificationCardConfig {
@@ -129,6 +133,18 @@ export interface FullscreenNotificationCardConfig {
   respect_reduced_motion?: boolean;
   /** Log trigger evaluation to the browser console. */
   debug?: boolean;
+
+  /** Shorthand delivery gate: the entity whose state releases held notifications. */
+  deliver_entity?: string;
+  /** Shorthand delivery gate: the state of `deliver_entity` that releases them. */
+  deliver_state?: string | number | (string | number)[];
+  /** Full delivery gate. ANDed with the shorthand above. */
+  deliver_when?: ConditionConfig | ConditionConfig[];
+  /** Seconds a held notification stays valid. 0, the default, means forever. */
+  hold_expiry?: number;
+  /** Most notifications to hold at once. The oldest are dropped first. */
+  max_held?: number;
+
   notifications?: NotificationConfig[];
 }
 
@@ -147,6 +163,8 @@ export interface ResolvedNotification {
   tint?: string;
   duration: number;
   progress: number;
+  /** When the notification was triggered, which is what held ones are aged by. */
+  firedAt: number;
 }
 
 export interface LovelaceCard extends HTMLElement {

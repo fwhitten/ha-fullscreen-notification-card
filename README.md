@@ -110,6 +110,11 @@ These apply to every notification on the card.
 | `dismiss_on_tap` | boolean | `true` | Tapping the notification ends it early. |
 | `respect_reduced_motion` | boolean | `true` | Drop the slide and rise animations when the OS asks for reduced motion. |
 | `debug` | boolean | `false` | Log every trigger evaluation to the browser console. |
+| `deliver_entity` | entity id | — | Hold notifications back until this entity is in `deliver_state`. See [Holding notifications](#holding-notifications-until-someone-is-there). |
+| `deliver_state` | string \| list | — | The state of `deliver_entity` that releases held notifications. |
+| `deliver_when` | condition \| list | — | Full conditions for the same gate. ANDed with `deliver_entity`/`deliver_state`. |
+| `hold_expiry` | number | `0` | Seconds a held notification stays valid. `0` keeps it until it is delivered. |
+| `max_held` | number | `10` | Most notifications to hold at once. The oldest are dropped first. |
 | `notifications` | list | `[]` | The notifications themselves. |
 
 ## Notification options
@@ -132,6 +137,8 @@ These apply to every notification on the card.
 | `progress` | number \| entity id \| template | entity state | `progress` type only: the value to sweep to. |
 | `progress_max` | number \| entity id \| template | entity `max`, else `100` | The value that represents 100%. |
 | `tap_action` | action | — | `navigate`, `url`, `perform-action`, `more-info`, `toggle` or `none`. |
+| `hold` | boolean | `true` | Set `false` to always show this one immediately, ignoring the card's delivery gate. |
+| `deliver_when` | condition \| list | — | A delivery gate for this notification, replacing the card's rather than adding to it. |
 | `id` | string | — | A stable key. Worth setting if you reorder notifications and want cooldowns to survive. |
 
 ---
@@ -153,6 +160,47 @@ That has two consequences worth knowing:
 Evaluation happens in the browser, so a notification appears on every screen
 currently looking at that dashboard, and nowhere else. Notifications that
 trigger together are shown one after another, in the order they are listed.
+
+### Holding notifications until someone is there
+
+Set a delivery gate and notifications that trigger while it is shut are held
+rather than shown. When it opens they play through in the order they happened,
+one after another.
+
+```yaml
+type: custom:fullscreen-notification-card
+deliver_entity: binary_sensor.kitchen_presence
+deliver_state: "on"
+hold_expiry: 3600
+notifications:
+  - type: success
+    title: Washing finished
+    entity: sensor.washing_machine_status
+    state: complete
+
+  - type: success
+    title: Dishwasher finished
+    entity: sensor.dishwasher_status
+    state: complete
+```
+
+The washing machine finishes while the kitchen is empty, then the dishwasher
+does too. Nothing appears. You walk in, and both play in turn.
+
+Worth knowing:
+
+- A held notification is a **snapshot of the moment it triggered**, so its title
+  and message say what was true then, not what is true when you finally see it.
+- `hold_expiry` stops a notification turning up hours late. The default of `0`
+  means a held notification waits indefinitely.
+- If the gate shuts partway through a sequence, whatever is still queued goes
+  back on hold and resumes next time. The notification already on screen plays
+  out.
+- `hold: false` on a notification exempts it, which is what you want for
+  anything urgent.
+- The hold lives **in the browser tab**, so it does not survive a reload or
+  switching to another dashboard view. It suits a wall tablet left on one
+  dashboard, which is the case it was built for.
 
 ### Conditions
 
@@ -228,6 +276,28 @@ notifications:
     cancel_if_condition_clears: true
     tap_action:
       action: more-info
+```
+
+**Hold everything until you get home, but never a leak**
+
+```yaml
+type: custom:fullscreen-notification-card
+deliver_entity: person.fred
+deliver_state: home
+hold_expiry: 7200
+max_held: 5
+notifications:
+  - type: success
+    title: Washing finished
+    entity: sensor.washing_machine_status
+    state: complete
+
+  - type: warning
+    title: Water leak detected
+    entity: binary_sensor.kitchen_leak
+    state: "on"
+    hold: false
+    color: red
 ```
 
 **Tap through to a dashboard**

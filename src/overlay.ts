@@ -32,6 +32,27 @@ export interface Presentation {
 class Cancelled extends Error {}
 
 /**
+ * Wait for one painted frame, but never longer than a moment.
+ *
+ * The opening transitions need a frame at the initial state to animate from,
+ * yet a hidden or throttled tab never paints - and a bare
+ * `requestAnimationFrame` there would hang the whole sequence, leaving the
+ * queue stuck and the card silent even after the tab came back.
+ */
+const nextFrame = (): Promise<void> =>
+  new Promise((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+    requestAnimationFrame(finish);
+    setTimeout(finish, 50);
+  });
+
+/**
  * A run token. `wake` lets a dismissal cut short whatever timer the sequence is
  * currently sitting on, instead of the tap only taking effect once the full
  * hold has elapsed.
@@ -163,7 +184,7 @@ export class FsnOverlay extends LitElement {
     this._visible = true;
     await this.updateComplete;
     // One frame at the initial state so the opening transitions actually run.
-    await new Promise(requestAnimationFrame);
+    await nextFrame();
 
     try {
       if (useBackdrop) {

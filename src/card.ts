@@ -2,7 +2,13 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import './overlay';
 import type { FsnOverlay, Presentation } from './overlay';
-import { checkNotification, collectTemplates } from './conditions';
+import {
+  canDeliver,
+  checkNotification,
+  collectCardTemplates,
+  collectTemplates,
+  type EvaluationContext,
+} from './conditions';
 import { TemplateSubscriber } from './templates';
 import {
   DEFAULTS,
@@ -40,6 +46,8 @@ export class FullscreenNotificationCard extends LitElement {
   private _templates = new TemplateSubscriber(() => this._evaluate());
   private _triggers = new Map<string, TriggerState>();
   private _queue: ResolvedNotification[] = [];
+  /** Triggered but not yet allowed on screen, oldest first. */
+  private _held: ResolvedNotification[] = [];
   private _running = false;
   private _current?: { key: string; presentation: Presentation };
 
@@ -80,7 +88,12 @@ export class FullscreenNotificationCard extends LitElement {
     });
 
     this._config = { ...config, notifications };
+    // Everything pending belongs to the old config: its keys may no longer
+    // exist, and its snapshots were resolved against settings that have since
+    // changed. Re-baseline rather than deliver something orphaned.
     this._triggers.clear();
+    this._queue = [];
+    this._held = [];
     this._syncTemplates();
   }
 
@@ -135,6 +148,7 @@ export class FullscreenNotificationCard extends LitElement {
     super.disconnectedCallback();
     this._current?.presentation.dismiss();
     this._queue = [];
+    this._held = [];
     this._running = false;
     this._templates.destroy();
     this._overlay?.abort();
@@ -144,8 +158,15 @@ export class FullscreenNotificationCard extends LitElement {
   // --- triggering --------------------------------------------------------
 
   private _syncTemplates(): void {
-    const templates = (this._config?.notifications ?? []).flatMap(collectTemplates);
-    this._templates.sync(templates);
+    const config = this._config;
+    if (!config) {
+      this._templates.sync([]);
+      return;
+    }
+    this._templates.sync([
+      ...collectCardTemplates(config),
+      ...(config.notifications ?? []).flatMap(collectTemplates),
+    ]);
   }
 
   private _evaluate(): void {
@@ -181,7 +202,7 @@ export class FullscreenNotificationCard extends LitElement {
       this._log('evaluate', key, { now, first, rising });
 
       if (rising) {
-        this._fire(notification, key, trigger);
+        this._fire(notification, key, trigger, ctx);
       } else if (
         !now &&
         notification.cancel_if_condition_clears &&
@@ -190,36 +211,135 @@ export class FullscreenNotificationCard extends LitElement {
         this._current.presentation.dismiss();
       }
     });
+
+    this._reconcile(config, ctx);
+  }
+
+  /**
+   * Move notifications between the hold and the display queue as the delivery
+   * gate opens and closes, then drop anything that has waited too long.
+   *
+   * Runs on every state update rather than only on the gate's rising edge, so a
+   * card that is reconfigured, or one whose gate was already open when a
+   * notification was held, still catches up.
+   */
+  private _reconcile(
+    config: FullscreenNotificationCardConfig,
+    ctx: EvaluationContext,
+  ): void {
+    const deliverable = (notification: ResolvedNotification): boolean =>
+      canDeliver(config, notification.config, ctx);
+
+    // Anything queued but not yet shown goes back on hold if its gate shut -
+    // walking out of the room should stop the rest of the sequence.
+    const staying = this._queue.filter((notification) => {
+      if (deliverable(notification)) {
+        return true;
+      }
+      this._log('re-hold', notification.key);
+      this._held.push(notification);
+      return false;
+    });
+    this._queue = staying;
+
+    // Age the hold out before releasing anything: a notification that sat past
+    // its expiry must be dropped, not delivered the moment the gate opens.
+    this._trimHeld(config);
+
+    const releasing = this._held.filter(deliverable);
+    if (releasing.length) {
+      this._held = this._held.filter((n) => !releasing.includes(n));
+      // Oldest first, so a backlog plays back in the order it happened.
+      releasing.sort((a, b) => a.firedAt - b.firedAt);
+      this._queue.push(...releasing);
+      this._log('release', releasing.map((n) => n.key));
+    }
+
+    if (this._queue.length) {
+      void this._pump();
+    }
+  }
+
+  private _trimHeld(config: FullscreenNotificationCardConfig): void {
+    const expiry = (config.hold_expiry ?? DEFAULTS.hold_expiry) * 1000;
+    if (expiry > 0) {
+      const cutoff = Date.now() - expiry;
+      this._held = this._held.filter((notification) => {
+        if (notification.firedAt >= cutoff) {
+          return true;
+        }
+        this._log('expired', notification.key);
+        return false;
+      });
+    }
+
+    const max = config.max_held ?? DEFAULTS.max_held;
+    if (max > 0 && this._held.length > max) {
+      const dropped = this._held.splice(0, this._held.length - max);
+      this._log('dropped', dropped.map((n) => n.key));
+    }
   }
 
   private _fire(
     notification: NotificationConfig,
     key: string,
     trigger: TriggerState,
+    ctx: EvaluationContext,
   ): void {
     const cooldown = (notification.cooldown ?? 0) * 1000;
     if (cooldown && Date.now() - trigger.lastFiredAt < cooldown) {
       return;
     }
-    // Already on screen or waiting its turn: don't stack duplicates.
-    if (this._current?.key === key || this._queue.some((q) => q.key === key)) {
+    // Already on screen, waiting its turn, or already on hold: no duplicates.
+    if (
+      this._current?.key === key ||
+      this._queue.some((q) => q.key === key) ||
+      this._held.some((q) => q.key === key)
+    ) {
       return;
     }
     trigger.lastFiredAt = Date.now();
     this._log('fire', key);
-    this.enqueue(notification, key);
+    this.enqueue(notification, key, ctx);
   }
 
-  /** Queue a notification for display. Also used by the editor's preview. */
-  public enqueue(notification: NotificationConfig, key: string): void {
-    if (!this._config) {
+  /**
+   * Take a notification that has just triggered and either queue it for display
+   * or put it on hold.
+   *
+   * It is resolved here rather than at delivery time on purpose: a held
+   * notification is a record of something that already happened, so its title,
+   * message and progress are a snapshot of the moment it fired, not of whenever
+   * somebody finally walks into the room.
+   */
+  public enqueue(
+    notification: NotificationConfig,
+    key: string,
+    ctx?: EvaluationContext,
+  ): void {
+    const config = this._config;
+    if (!config) {
       return;
     }
-    this._queue.push(
-      resolveNotification(notification, key, this._config, this._hass, (template) =>
-        this._templates.get(template),
-      ),
+
+    const resolved = resolveNotification(notification, key, config, this._hass, (template) =>
+      this._templates.get(template),
     );
+
+    const context =
+      ctx ??
+      (this._hass
+        ? { hass: this._hass, template: (t: string) => this._templates.get(t) }
+        : undefined);
+
+    if (context && !canDeliver(config, notification, context)) {
+      this._held.push(resolved);
+      this._trimHeld(config);
+      this._log('held', key, { held: this._held.length });
+      return;
+    }
+
+    this._queue.push(resolved);
     void this._pump();
   }
 

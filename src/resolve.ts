@@ -16,6 +16,8 @@ export const DEFAULTS = {
   backdrop_opacity: 0.6,
   pill_backdrop: false,
   gap: 0.4,
+  hold_expiry: 0,
+  max_held: 10,
   dismiss_on_tap: true,
   respect_reduced_motion: true,
 } as const;
@@ -173,5 +175,6 @@ export const resolveNotification = (
     tint,
     duration: notification.duration ?? config.duration ?? DEFAULTS.duration,
     progress,
+    firedAt: Date.now(),
   };
 };

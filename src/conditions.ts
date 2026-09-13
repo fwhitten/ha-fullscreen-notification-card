@@ -1,4 +1,9 @@
-import type { ConditionConfig, HomeAssistant, NotificationConfig } from './types';
+import type {
+  ConditionConfig,
+  FullscreenNotificationCardConfig,
+  HomeAssistant,
+  NotificationConfig,
+} from './types';
 import { isTemplate } from './templates';
 
 const asArray = <T>(value: T | T[] | undefined): T[] =>
@@ -166,6 +171,60 @@ export const checkNotification = (
   return conditions.length > 0 && conditions.every((c) => checkCondition(c, ctx));
 };
 
+/**
+ * The gate a notification has to pass before it is allowed on screen. A
+ * notification's own `deliver_when` replaces the card's gate rather than adding
+ * to it, so a single notification can opt into a different rule entirely.
+ */
+export const deliveryConditions = (
+  config: FullscreenNotificationCardConfig,
+  notification?: NotificationConfig,
+): ConditionConfig[] => {
+  if (notification?.deliver_when !== undefined) {
+    return asArray(notification.deliver_when);
+  }
+
+  const conditions = [...asArray(config.deliver_when)];
+  if (config.deliver_state !== undefined && config.deliver_entity) {
+    conditions.unshift({
+      condition: 'state',
+      entity: config.deliver_entity,
+      state: config.deliver_state,
+    });
+  }
+  return conditions;
+};
+
+/**
+ * Unlike a trigger, an empty gate means "deliver now": a card with no delivery
+ * conditions must behave exactly as it did before the gate existed.
+ */
+export const canDeliver = (
+  config: FullscreenNotificationCardConfig,
+  notification: NotificationConfig | undefined,
+  ctx: EvaluationContext,
+): boolean => {
+  if (notification?.hold === false) {
+    return true;
+  }
+  return deliveryConditions(config, notification).every((c) => checkCondition(c, ctx));
+};
+
+/** Every Jinja template referenced by the card-level delivery gate. */
+export const collectCardTemplates = (
+  config: FullscreenNotificationCardConfig,
+): string[] => {
+  const found: string[] = [];
+  const walk = (condition: ConditionConfig): void => {
+    if (condition.value_template && isTemplate(condition.value_template)) {
+      found.push(condition.value_template);
+    }
+    condition.conditions?.forEach(walk);
+  };
+  deliveryConditions(config).forEach(walk);
+  return found;
+};
+
 /** Collect every Jinja template referenced anywhere in a notification. */
 export const collectTemplates = (notification: NotificationConfig): string[] => {
   const found: string[] = [];
@@ -177,6 +236,7 @@ export const collectTemplates = (notification: NotificationConfig): string[] => 
     condition.conditions?.forEach(walk);
   };
   conditionsFor(notification).forEach(walk);
+  asArray(notification.deliver_when).forEach(walk);
 
   for (const value of [
     notification.title,

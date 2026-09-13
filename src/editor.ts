@@ -32,6 +32,10 @@ const LABELS: Record<string, string> = {
   dismiss_on_tap: 'Dismiss when tapped',
   respect_reduced_motion: 'Respect "reduce motion"',
   debug: 'Log trigger evaluation to the console',
+  deliver_entity: 'Only show notifications when this entity',
+  deliver_state: 'is in this state',
+  hold_expiry: 'Discard held notifications after',
+  max_held: 'Most notifications to hold',
   type: 'Type',
   title: 'Title',
   message: 'Message',
@@ -54,6 +58,10 @@ const HELPERS: Record<string, string> = {
   icon: "Leave empty to use the trigger entity's icon.",
   state: 'Pick a known state, or type any value. Leave empty to use the advanced conditions below.',
   progress_max: 'Defaults to the entity max attribute, or 100.',
+  deliver_entity:
+    'Leave empty to show every notification the moment it triggers. Otherwise they wait here until this is true, then play in sequence.',
+  hold_expiry: 'Seconds. 0 keeps a held notification until it is delivered.',
+  max_held: 'When more pile up than this, the oldest are dropped.',
 };
 
 const GLOBAL_SCHEMA = [
@@ -119,6 +127,22 @@ const GLOBAL_SCHEMA = [
       { name: 'dismiss_on_tap', selector: { boolean: {} } },
       { name: 'respect_reduced_motion', selector: { boolean: {} } },
       { name: 'debug', selector: { boolean: {} } },
+    ],
+  },
+];
+
+const S_DELIVER_ENTITY = [{ name: 'deliver_entity', selector: { entity: {} } }];
+const S_DELIVER_STATE_TEXT = [{ name: 'deliver_state', selector: { text: {} } }];
+const S_HOLD_LIMITS = [
+  {
+    type: 'grid',
+    name: '',
+    schema: [
+      {
+        name: 'hold_expiry',
+        selector: { number: { min: 0, step: 60, mode: 'box', unit_of_measurement: 's' } },
+      },
+      { name: 'max_held', selector: { number: { min: 1, step: 1, mode: 'box' } } },
     ],
   },
 ];
@@ -263,6 +287,8 @@ export class FullscreenNotificationCardEditor extends LitElement {
         @value-changed=${this._globalsChanged}
       ></ha-form>
 
+      ${this._renderDelivery(config)}
+
       <div class="section-title">Notifications</div>
       ${(config.notifications ?? []).map((notification, index) =>
         this._renderNotification(notification, index),
@@ -272,6 +298,79 @@ export class FullscreenNotificationCardEditor extends LitElement {
         <ha-icon icon="mdi:plus"></ha-icon> Add notification
       </button>
     `;
+  }
+
+  private _renderDelivery(config: FullscreenNotificationCardConfig): TemplateResult {
+    const data = {
+      deliver_entity: config.deliver_entity,
+      deliver_state: config.deliver_state,
+      hold_expiry: config.hold_expiry ?? DEFAULTS.hold_expiry,
+      max_held: config.max_held ?? DEFAULTS.max_held,
+    };
+
+    const form = (schema: unknown): TemplateResult => html`
+      <ha-form
+        .hass=${this._hass}
+        .data=${data}
+        .schema=${schema}
+        .computeLabel=${this._label}
+        .computeHelper=${this._helper}
+        @value-changed=${this._globalsChanged}
+      ></ha-form>
+    `;
+
+    return html`
+      <ha-expansion-panel
+        outlined
+        left-chevron
+        header="Delivery"
+        @expanded-changed=${this._stopEvent}
+      >
+        <div class="fields">
+          ${form(S_DELIVER_ENTITY)}
+          ${form(this._deliverStateSchema(config.deliver_entity))}
+          ${form(S_HOLD_LIMITS)}
+        </div>
+
+        <div class="yaml-label">
+          Advanced delivery conditions
+          <span class="yaml-hint">
+            Home Assistant condition syntax. ANDed with the simple gate above.
+          </span>
+        </div>
+        <ha-yaml-editor
+          .hass=${this._hass}
+          .defaultValue=${config.deliver_when ?? []}
+          @value-changed=${this._deliverWhenChanged}
+        ></ha-yaml-editor>
+      </ha-expansion-panel>
+    `;
+  }
+
+  private _deliverStateSchemas = new Map<string, unknown>();
+
+  private _deliverStateSchema(entity?: string): unknown {
+    if (!entity) {
+      return S_DELIVER_STATE_TEXT;
+    }
+    let schema = this._deliverStateSchemas.get(entity);
+    if (!schema) {
+      schema = [{ name: 'deliver_state', selector: { state: { entity_id: entity } } }];
+      this._deliverStateSchemas.set(entity, schema);
+    }
+    return schema;
+  }
+
+  private _deliverWhenChanged(ev: CustomEvent): void {
+    ev.stopPropagation();
+    if (ev.detail.isValid === false) {
+      return;
+    }
+    const value = ev.detail.value;
+    const empty = !value || (Array.isArray(value) && value.length === 0);
+    this._emit(this._config?.notifications ?? [], {
+      deliver_when: empty ? undefined : value,
+    });
   }
 
   /**
@@ -561,9 +660,18 @@ export class FullscreenNotificationCardEditor extends LitElement {
       ...this._config,
       ...globals,
       notifications,
-    } as FullscreenNotificationCardConfig;
-    this._config = config;
-    fireConfigChanged(this, config);
+    } as Record<string, unknown>;
+
+    // A cleared control reports '' or undefined; left in place those would be
+    // written back out as empty keys.
+    for (const [key, value] of Object.entries(config)) {
+      if (value === undefined || value === '') {
+        delete config[key];
+      }
+    }
+
+    this._config = config as unknown as FullscreenNotificationCardConfig;
+    fireConfigChanged(this, this._config);
   }
 
   private _globalsChanged(ev: CustomEvent): void {
