@@ -1,6 +1,6 @@
 {
   "name": "ha-fullscreen-notification-card",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Fullscreen and pill notification card for Home Assistant dashboards, with animated success / warning / progress icons.",
   "type": "module",
   "private": true,
